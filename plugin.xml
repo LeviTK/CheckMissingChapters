@@ -3,8 +3,10 @@
     <name>CheckMissingChapters</name>
     <type>edit</type>
     <author>Jules</author>
-    <version>0.2.0</version>
-    <description>Checks for missing chapters/volumes in nav.xhtml. Supports custom regex and Chinese/Arabic numerals.</description>
+    <version>1.0.0</version>
+    <description>Checks for missing chapters/volumes in EPUB TOC (nav.xhtml/toc.ncx). Supports custom regex and Chinese/Arabic numerals.</description>
     <engine>python3.4</engine>
+    <autostart>true</autostart>
+    <autoclose>true</autoclose>
     <oslist>osx,win,unx</oslist>
 </plugin>
