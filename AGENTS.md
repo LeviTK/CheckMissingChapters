@@ -2,7 +2,8 @@
 
 ## Build & Test
 - **Environment**: Python 3.4+ embedded in Sigil.
-- **Run**: Zip the plugin folder (`.zip`) and install via Sigil > Plugins > Manage Plugins.
+- **Run**: Zip the contents of the `src` folder (`.zip`) and install via Sigil > Plugins > Manage Plugins.
+  - *Note: Do not zip the `src` folder itself, zip the files inside it.*
 - **Test**: Manual verification only. No automated test suite exists.
 - **Debug**: Use `print()` statements; output appears in Sigil's Plugin Runner window.
 
@@ -13,4 +14,4 @@
 - **Typing**: Dynamic typing; type hints are not used.
 - **Error Handling**: Use `try...except` blocks generously to prevent crashing the host application.
 - **UI**: Always import Qt classes from `pyqt_import` to ensure cross-version compatibility.
-- **Structure**: The entry point must be `run(bk)`; logic generally resides in `plugin.py`.
+- **Structure**: The entry point must be `run(bk)`; source code resides in `src/`. Logic generally resides in `src/plugin.py`.
