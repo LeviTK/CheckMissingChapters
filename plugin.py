@@ -8,23 +8,17 @@ from pyqt_import import *
 # --- Configuration ---
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
-DEFAULT_CONFIG = {
-    "chap_prefix": "第",
-    "chap_num_type": "mixed",  # mixed, arabic, cn_lower, cn_upper
-    "chap_suffix": "章",
-    "custom_suffixes": ["章", "回", "节", "话", "集"],
-    "enable_volume": False,
-    "vol_regex": r"第\s*([0-9]+|[零〇一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟萬两]+)\s*[卷部]",
-    "chap_reset_mode": "reset_1",
-    "auto_detect_reset": False,
-}
-
 # 数字模式正则
+CN_NUM_LOWER = "零〇一二三四五六七八九十百千万两"
+CN_NUM_UPPER = "壹贰叁肆伍陆柒捌玖拾佰仟萬"
+CN_NUM_ALL = CN_NUM_LOWER + CN_NUM_UPPER
+DIGIT_PATTERN = r"[0-9０-９]"
+
 NUM_PATTERNS = {
-    "mixed": r"[0-9]+|[零〇一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟萬两]+",
-    "arabic": r"[0-9]+",
-    "cn_lower": r"[零〇一二三四五六七八九十百千万两]+",
-    "cn_upper": r"[壹贰叁肆伍陆柒捌玖拾佰仟萬]+",
+    "mixed": rf"(?:{DIGIT_PATTERN}(?:\s*{DIGIT_PATTERN})*|[{CN_NUM_ALL}](?:\s*[{CN_NUM_ALL}])*)",
+    "arabic": rf"{DIGIT_PATTERN}(?:\s*{DIGIT_PATTERN})*",
+    "cn_lower": rf"[{CN_NUM_LOWER}](?:\s*[{CN_NUM_LOWER}])*",
+    "cn_upper": rf"[{CN_NUM_UPPER}](?:\s*[{CN_NUM_UPPER}])*",
 }
 
 NUM_TYPE_NAMES = {
@@ -32,6 +26,19 @@ NUM_TYPE_NAMES = {
     "arabic": "阿拉伯数字",
     "cn_lower": "中文小写",
     "cn_upper": "中文大写",
+}
+
+DEFAULT_VOL_REGEX = rf"第\s*({NUM_PATTERNS['mixed']})\s*[卷部册辑篇集]"
+
+DEFAULT_CONFIG = {
+    "chap_prefix": "第",
+    "chap_num_type": "mixed",  # mixed, arabic, cn_lower, cn_upper
+    "chap_suffix": "章",
+    "custom_suffixes": ["章", "回", "节", "话", "集"],
+    "enable_volume": False,
+    "vol_regex": DEFAULT_VOL_REGEX,
+    "chap_reset_mode": "reset_1",
+    "auto_detect_reset": False,
 }
 
 
@@ -65,6 +72,31 @@ def save_config(config):
 
 
 # --- Utilities ---
+FULLWIDTH_DIGIT_MAP = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def normalize_number_text(text):
+    if not text:
+        return ""
+    text = text.translate(FULLWIDTH_DIGIT_MAP)
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+def build_chapter_regex_str(config):
+    prefix = config["chap_prefix"]
+    num_type = config.get("chap_num_type", "mixed")
+    num_pat = NUM_PATTERNS.get(num_type, NUM_PATTERNS["mixed"])
+    suffix = config["chap_suffix"]
+
+    if "|" in suffix and not (suffix.startswith("(") and suffix.endswith(")")):
+        real_suffix = f"(?:{suffix})"
+    else:
+        real_suffix = suffix
+
+    return f"{prefix}\\s*({num_pat})\\s*{real_suffix}"
+
+
 def cn2an_simple(text):
     """
     Chinese numeral to Integer conversion.
@@ -90,7 +122,7 @@ def cn2an_simple(text):
         "万": 10000, "萬": 10000,
     }
 
-    text = text.strip()
+    text = normalize_number_text(text)
     if not text:
         return 0
 
@@ -304,15 +336,7 @@ def analyze_chapter_format(texts, config):
     """
     prefix = config["chap_prefix"]
     suffix = config["chap_suffix"]
-    num_type = config.get("chap_num_type", "mixed")
-    num_pat = NUM_PATTERNS.get(num_type, NUM_PATTERNS["mixed"])
-    
-    if "|" in suffix and not (suffix.startswith("(") and suffix.endswith(")")):
-        real_suffix = f"(?:{suffix})"
-    else:
-        real_suffix = suffix
-    
-    chap_regex_str = f"{prefix}\\s*({num_pat})\\s*{real_suffix}"
+    chap_regex_str = build_chapter_regex_str(config)
     vol_regex_str = config.get("vol_regex", "")
     
     try:
@@ -325,8 +349,8 @@ def analyze_chapter_format(texts, config):
     sample_chapters = []
     has_volume = False
     
-    cn_lower_chars = set("零〇一二三四五六七八九十百千万两")
-    cn_upper_chars = set("壹贰叁肆伍陆柒捌玖拾佰仟萬")
+    cn_lower_chars = set(CN_NUM_LOWER)
+    cn_upper_chars = set(CN_NUM_UPPER)
     
     for t in texts:
         if vol_re and vol_re.search(t):
@@ -335,7 +359,7 @@ def analyze_chapter_format(texts, config):
         
         cm = chap_re.search(t)
         if cm:
-            num_str = cm.group(1)
+            num_str = normalize_number_text(cm.group(1))
             
             if num_str.isdigit():
                 num_types["arabic"] += 1
@@ -372,15 +396,7 @@ def get_chapter_info_from_nav(bk, config):
 
     content = bk.readfile(file_id)
     
-    prefix = config["chap_prefix"]
-    num_type = config.get("chap_num_type", "mixed")
-    num_pat = NUM_PATTERNS.get(num_type, NUM_PATTERNS["mixed"])
-    suffix = config["chap_suffix"]
-    if "|" in suffix and not (suffix.startswith("(") and suffix.endswith(")")):
-        real_suffix = f"(?:{suffix})"
-    else:
-        real_suffix = suffix
-    chap_regex_str = f"{prefix}\\s*({num_pat})\\s*{real_suffix}"
+    chap_regex_str = build_chapter_regex_str(config)
     
     try:
         chap_re = re.compile(chap_regex_str)
@@ -610,7 +626,7 @@ class MainDialog(QDialog):
         vol_row1.addWidget(self.chk_enable_vol)
         vol_row1.addWidget(QLabel("卷正则:"))
         self.inp_vol_regex = QLineEdit(self.config.get("vol_regex", ""))
-        self.inp_vol_regex.setPlaceholderText("第\\s*([0-9]+|[零〇一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾佰仟萬两]+)\\s*[卷部]")
+        self.inp_vol_regex.setPlaceholderText(DEFAULT_VOL_REGEX)
         self.inp_vol_regex.setEnabled(self.chk_enable_vol.isChecked())
         self.chk_enable_vol.toggled.connect(self.inp_vol_regex.setEnabled)
         vol_row1.addWidget(self.inp_vol_regex, 1)
@@ -785,15 +801,9 @@ def split_by_reset(chapters):
 def perform_check(bk, config):
     prefix = config["chap_prefix"]
     num_type = config.get("chap_num_type", "mixed")
-    num_pat = NUM_PATTERNS.get(num_type, NUM_PATTERNS["mixed"])
     suffix = config["chap_suffix"]
 
-    if "|" in suffix and not (suffix.startswith("(") and suffix.endswith(")")):
-        real_suffix = f"(?:{suffix})"
-    else:
-        real_suffix = suffix
-
-    chap_regex_str = f"{prefix}\\s*({num_pat})\\s*{real_suffix}"
+    chap_regex_str = build_chapter_regex_str(config)
     enable_vol = config["enable_volume"]
     vol_regex_str = config["vol_regex"]
     mode = config["chap_reset_mode"]
