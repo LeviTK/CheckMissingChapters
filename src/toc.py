@@ -6,6 +6,34 @@ from constants import MISSING_CLASS, MISSING_MARKER
 from num_utils import cn2an_simple
 
 
+def _ensure_text(content):
+    if isinstance(content, bytes):
+        return content.decode("utf-8", "replace")
+    return content
+
+
+def _strip_ns(tag):
+    if "}" in tag:
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def _parse_xml_robust(content):
+    try:
+        root = ET.fromstring(content)
+        return root
+    except ET.ParseError:
+        pass
+
+    try:
+        clean = re.sub(r'<\?xml[^?]*\?>', '', content, count=1)
+        clean = re.sub(r'<!DOCTYPE[^>]*>', '', clean, count=1)
+        root = ET.fromstring(clean)
+        return root
+    except ET.ParseError:
+        return None
+
+
 def get_toc_source(bk):
     nav_id = None
     ncx_id = None
@@ -24,21 +52,38 @@ def get_toc_source(bk):
     return None, None
 
 
+def _elem_full_text(elem):
+    return "".join(elem.itertext()).strip()
+
+
 def extract_texts_from_xml(content):
-    texts = []
-    try:
-        clean_content = re.sub(r' xmlns="[^"]+"', "", content, count=1)
-        clean_content = re.sub(r' xmlns:[a-z]+="[^"]+"', "", clean_content)
-        root = ET.fromstring(clean_content)
+    root = _parse_xml_robust(content)
+    if root is not None:
+        texts = []
         for elem in root.iter():
             if elem.text and elem.text.strip():
                 texts.append(elem.text.strip())
             if elem.tail and elem.tail.strip():
                 texts.append(elem.tail.strip())
-    except Exception:
-        matches = re.findall(r">([^<]+)<", content)
-        texts = [m.strip() for m in matches if m.strip()]
-    return texts
+        return texts
+
+    matches = re.findall(r">([^<]+)<", content)
+    return [m.strip() for m in matches if m.strip()]
+
+
+def _extract_nav_links(content):
+    root = _parse_xml_robust(content)
+    if root is None:
+        return []
+
+    links = []
+    for elem in root.iter():
+        if _strip_ns(elem.tag) == "a":
+            href = elem.get("href", "")
+            text = _elem_full_text(elem)
+            if text:
+                links.append((href, text))
+    return links
 
 
 def get_nav_texts(bk):
@@ -48,8 +93,9 @@ def get_nav_texts(bk):
         return []
 
     try:
-        content = bk.readfile(file_id)
-    except Exception:
+        content = _ensure_text(bk.readfile(file_id))
+    except Exception as e:
+        print("CheckMissingChapters: 读取目录文件失败: {}".format(e))
         return []
 
     return extract_texts_from_xml(content)
@@ -60,28 +106,25 @@ def get_chapter_info_from_nav(bk, config):
     if not file_id or toc_type != "nav":
         return None, None, {}
 
-    content = bk.readfile(file_id)
+    content = _ensure_text(bk.readfile(file_id))
 
     chap_regex_str = build_chapter_regex_str(config)
 
     try:
         chap_re = re.compile(chap_regex_str)
-    except:
+    except re.error as e:
+        print("CheckMissingChapters: 章节正则编译失败: {}".format(e))
         return file_id, content, {}
 
     chapter_map = {}
-    pattern = re.compile(r'<a[^>]*href="([^"]*)"[^>]*>([^<]*)</a>', re.IGNORECASE)
+    links = _extract_nav_links(content)
 
-    for match in pattern.finditer(content):
-        href = match.group(1)
-        text = match.group(2).strip()
+    for href, text in links:
         cm = chap_re.search(text)
         if cm:
-            try:
-                c_num = cn2an_simple(cm.group(1))
+            c_num = cn2an_simple(cm.group(1))
+            if c_num is not None:
                 chapter_map[c_num] = href
-            except:
-                pass
 
     return file_id, content, chapter_map
 
@@ -119,7 +162,7 @@ def insert_missing_chapters_to_nav(bk, config, missing_chapters):
     inserted = 0
     new_content = content
 
-    for missing_num in sorted(missing_chapters, reverse=True):
+    for missing_num in sorted(missing_chapters):
         target_href = find_nearest_existing_href(missing_num, chapter_map, all_chapters)
 
         missing_title = f"{MISSING_MARKER}{prefix}{missing_num}{suffix}"
@@ -132,7 +175,7 @@ def insert_missing_chapters_to_nav(bk, config, missing_chapters):
             next_href = chapter_map.get(next_chap, "")
             if next_href:
                 pattern = re.compile(
-                    rf'(<li[^>]*>\s*<a[^>]*href="{re.escape(next_href)}"[^>]*>[^<]*</a>\s*</li>)',
+                    rf'(<li[^>]*>\s*<a[^>]*href="{re.escape(next_href)}"[^>]*>.*?</a>\s*</li>)',
                     re.IGNORECASE | re.DOTALL,
                 )
                 match = pattern.search(new_content)
@@ -152,7 +195,7 @@ def insert_missing_chapters_to_nav(bk, config, missing_chapters):
             prev_href = chapter_map.get(prev_chap, "")
             if prev_href:
                 pattern = re.compile(
-                    rf'(<li[^>]*>\s*<a[^>]*href="{re.escape(prev_href)}"[^>]*>[^<]*</a>\s*</li>)',
+                    rf'(<li[^>]*>\s*<a[^>]*href="{re.escape(prev_href)}"[^>]*>.*?</a>\s*</li>)',
                     re.IGNORECASE | re.DOTALL,
                 )
                 match = pattern.search(new_content)
@@ -178,7 +221,7 @@ def remove_missing_placeholders(bk):
     if not file_id or toc_type != "nav":
         return 0, "未找到 nav.xhtml 文件"
 
-    content = bk.readfile(file_id)
+    content = _ensure_text(bk.readfile(file_id))
 
     pattern = re.compile(
         rf'<li[^>]*class="[^"]*{MISSING_CLASS}[^"]*"[^>]*>.*?</li>\s*',

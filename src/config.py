@@ -20,6 +20,8 @@ DEFAULT_CONFIG = {
     "auto_detect_reset": False,
 }
 
+_VALID_KEYS = set(DEFAULT_CONFIG.keys())
+
 
 def load_or_create_config():
     config = DEFAULT_CONFIG.copy()
@@ -28,15 +30,19 @@ def load_or_create_config():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 user_config = json.load(f)
                 for k, v in user_config.items():
-                    config[k] = v
-        except Exception:
-            pass
+                    if k in _VALID_KEYS:
+                        if type(v) == type(DEFAULT_CONFIG[k]):
+                            config[k] = v
+                        else:
+                            print("CheckMissingChapters: 配置项 '{}' 类型错误，使用默认值".format(k))
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            print("CheckMissingChapters: 读取配置失败: {}".format(e))
     else:
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(DEFAULT_CONFIG, f, indent=4, ensure_ascii=False)
-        except Exception:
-            pass
+        except (IOError, OSError) as e:
+            print("CheckMissingChapters: 创建默认配置失败: {}".format(e))
     return config
 
 
@@ -44,8 +50,8 @@ def save_config(config):
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=4, ensure_ascii=False)
-    except Exception:
-        pass
+    except (IOError, OSError) as e:
+        print("CheckMissingChapters: 保存配置失败: {}".format(e))
 
 
 def build_chapter_regex_str(config):

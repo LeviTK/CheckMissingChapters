@@ -51,11 +51,13 @@ def check_sequence_report(
     status_icon = "✅"
     msg_prefix = ""
 
+    range_start = start
     if expected_start is not None and start != expected_start:
         msg_prefix = f"[起始错误: {start} (应为 {expected_start})]"
         status_icon = "⚠️ "
+        range_start = min(expected_start, start)
 
-    full = set(range(start, end + 1))
+    full = set(range(range_start, end + 1))
     found = set(unique_numbers)
     missing = sorted(list(full - found))
 
@@ -133,7 +135,8 @@ def analyze_chapter_format(texts, config):
     try:
         chap_re = re.compile(chap_regex_str)
         vol_re = re.compile(vol_regex_str) if vol_regex_str else None
-    except:
+    except re.error as e:
+        print("CheckMissingChapters: 分析正则编译失败: {}".format(e))
         return None
 
     num_types = {"arabic": 0, "cn_lower": 0, "cn_upper": 0, "variant": 0}
@@ -188,7 +191,7 @@ def perform_check(bk, config):
     mode = config["chap_reset_mode"]
     auto_detect_reset = config.get("auto_detect_reset", False)
 
-    file_id, toc_type = bk and __safe_get_toc(bk) or (None, None)
+    file_id, toc_type = _safe_get_toc(bk)
     toc_info = f"{toc_type.upper()}" if toc_type else "未找到"
 
     report_lines = []
@@ -209,7 +212,7 @@ def perform_check(bk, config):
     try:
         chap_re = re.compile(chap_regex_str)
         vol_re = re.compile(vol_regex_str) if (enable_vol and vol_regex_str) else None
-    except Exception as e:
+    except re.error as e:
         return f"❌ 正则错误: {e}", []
 
     texts = get_nav_texts(bk)
@@ -257,6 +260,7 @@ def perform_check(bk, config):
     volume_order = []
     current_vol = 0
     all_chapters_ordered = []
+    skipped_texts = []
 
     if enable_vol and vol_re:
         current_vol = -1
@@ -268,34 +272,34 @@ def perform_check(bk, config):
         if enable_vol and vol_re:
             vm = vol_re.search(t)
             if vm:
-                try:
-                    if vm.groups():
-                        v_num = cn2an_simple(vm.group(1))
-                    else:
-                        v_num = len(volume_order) + 1
-                    current_vol = v_num
-                    if current_vol not in data:
-                        data[current_vol] = []
-                        volume_order.append(current_vol)
-                    continue
-                except:
-                    pass
+                if vm.groups():
+                    v_num = cn2an_simple(vm.group(1))
+                    if v_num is None:
+                        skipped_texts.append(t.strip()[:30])
+                        continue
+                else:
+                    v_num = len(volume_order) + 1
+                current_vol = v_num
+                if current_vol not in data:
+                    data[current_vol] = []
+                    volume_order.append(current_vol)
+                continue
 
         cm = chap_re.search(t)
         if cm:
-            try:
-                c_num = cn2an_simple(cm.group(1))
-                all_chapters_ordered.append(c_num)
-                target_vol = current_vol
-                if target_vol == -1:
-                    target_vol = 0
-                if target_vol not in data:
-                    data[target_vol] = []
-                    if target_vol not in volume_order:
-                        volume_order.append(target_vol)
-                data[target_vol].append(c_num)
-            except:
-                pass
+            c_num = cn2an_simple(cm.group(1))
+            if c_num is None:
+                skipped_texts.append(t.strip()[:30])
+                continue
+            all_chapters_ordered.append(c_num)
+            target_vol = current_vol
+            if target_vol == -1:
+                target_vol = 0
+            if target_vol not in data:
+                data[target_vol] = []
+                if target_vol not in volume_order:
+                    volume_order.append(target_vol)
+            data[target_vol].append(c_num)
 
     all_missing = []
 
@@ -319,6 +323,12 @@ def perform_check(bk, config):
 
             if not has_content:
                 report_lines.append("⚠️  未找到匹配的章节")
+
+            if skipped_texts:
+                report_lines.append("")
+                report_lines.append(f"⚠️  跳过 {len(skipped_texts)} 个无法解析的条目:")
+                for s in skipped_texts[:5]:
+                    report_lines.append(f"      • {s}")
 
             return "\n".join(report_lines), all_missing
 
@@ -368,13 +378,20 @@ def perform_check(bk, config):
         if not file_id:
             report_lines.append("   -> 未在 EPUB 中找到 nav.xhtml 或 toc.ncx")
 
+    if skipped_texts:
+        report_lines.append("")
+        report_lines.append(f"⚠️  跳过 {len(skipped_texts)} 个无法解析的条目:")
+        for s in skipped_texts[:5]:
+            report_lines.append(f"      • {s}")
+
     return "\n".join(report_lines), all_missing
 
 
-def __safe_get_toc(bk):
+def _safe_get_toc(bk):
     try:
         from toc import get_toc_source
 
         return get_toc_source(bk)
-    except Exception:
+    except Exception as e:
+        print("CheckMissingChapters: 获取目录源失败: {}".format(e))
         return None, None
