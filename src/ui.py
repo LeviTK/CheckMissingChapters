@@ -2,7 +2,7 @@ from pyqt_import import *
 
 from config import DEFAULT_VOL_REGEX, load_or_create_config, save_config
 from constants import MISSING_CLASS, MISSING_MARKER
-from report import perform_check
+from report import format_issues_text, perform_check
 from toc import insert_missing_chapters_to_nav, remove_missing_placeholders
 
 
@@ -11,8 +11,9 @@ class MainDialog(QDialog):
         super().__init__(parent)
         self.bk = bk
         self.config = config
+        self.last_missing = []
         self.setWindowTitle("章节缺失检查")
-        self.resize(800, 600)
+        self.resize(800, 650)
         self.init_ui()
 
     def init_ui(self):
@@ -129,6 +130,7 @@ class MainDialog(QDialog):
             f"在 nav 目录中插入缺失章节占位符\n标记: {MISSING_MARKER}"
         )
         self.btn_insert.clicked.connect(self.do_insert_missing)
+        self.btn_insert.setEnabled(False)
         self.btn_remove = QPushButton("删除占位符")
         self.btn_remove.setMinimumHeight(36)
         self.btn_remove.setToolTip(f"删除所有带 {MISSING_MARKER} 标记的占位符")
@@ -144,17 +146,23 @@ class MainDialog(QDialog):
         btn_layout.addWidget(self.btn_close)
         layout.addLayout(btn_layout)
 
-        grp_result = QGroupBox("检查结果")
-        result_layout = QVBoxLayout()
-        self.text_result = QTextEdit()
-        self.text_result.setReadOnly(True)
-        font = QFont()
-        font.setPointSize(12)
-        self.text_result.setFont(font)
-        self.text_result.setPlaceholderText("点击「开始检查」查看结果...")
-        result_layout.addWidget(self.text_result)
-        grp_result.setLayout(result_layout)
-        layout.addWidget(grp_result, 1)
+        self.tabs = QTabWidget()
+        result_font = QFont()
+        result_font.setPointSize(12)
+
+        self.text_report = QTextEdit()
+        self.text_report.setReadOnly(True)
+        self.text_report.setFont(result_font)
+        self.text_report.setPlaceholderText("点击「开始检查」查看结果...")
+        self.tabs.addTab(self.text_report, "检查结果")
+
+        self.text_issues = QTextEdit()
+        self.text_issues.setReadOnly(True)
+        self.text_issues.setFont(result_font)
+        self.text_issues.setPlaceholderText("检查完成后，问题详情将显示在此处...")
+        self.tabs.addTab(self.text_issues, "问题详情")
+
+        layout.addWidget(self.tabs, 1)
 
         self.setLayout(layout)
 
@@ -162,7 +170,7 @@ class MainDialog(QDialog):
         current = self.combo_suffix.currentText().strip()
         if current and self.combo_suffix.findText(current) < 0:
             self.combo_suffix.addItem(current)
-            self.text_result.setPlainText(f"✅ 已添加后缀「{current}」")
+            self.text_report.setPlainText(f"✅ 已添加后缀「{current}」")
 
     def get_config(self):
         suffixes = [self.combo_suffix.itemText(i) for i in range(self.combo_suffix.count())]
@@ -181,19 +189,31 @@ class MainDialog(QDialog):
         new_config = self.get_config()
         save_config(new_config)
         self.config = new_config
-        self.text_result.setPlainText("✅ 设置已保存")
+        self.text_report.setPlainText("✅ 设置已保存")
 
     def do_check(self):
         new_config = self.get_config()
         save_config(new_config)
         self.config = new_config
-        result_text, missing = perform_check(self.bk, new_config)
+        result_text, missing, issues = perform_check(self.bk, new_config)
         self.last_missing = missing
-        self.text_result.setPlainText(result_text)
+
+        self.text_report.setPlainText(result_text)
+        self.text_issues.setPlainText(format_issues_text(issues))
+
+        self.btn_insert.setEnabled(bool(missing))
+
+        if issues:
+            issue_count = sum(i["count"] for i in issues)
+            self.tabs.setTabText(1, f"问题详情 ({issue_count})")
+            self.tabs.setCurrentIndex(1)
+        else:
+            self.tabs.setTabText(1, "问题详情")
+            self.tabs.setCurrentIndex(0)
 
     def do_insert_missing(self):
-        if not hasattr(self, "last_missing") or not self.last_missing:
-            self.text_result.setPlainText("⚠️ 请先点击「开始检查」获取缺失章节列表")
+        if not self.last_missing:
+            self.text_report.setPlainText("⚠️ 请先点击「开始检查」获取缺失章节列表")
             return
 
         reply = QMessageBox.question(
@@ -211,14 +231,15 @@ class MainDialog(QDialog):
             config = self.get_config()
             count, err = insert_missing_chapters_to_nav(self.bk, config, self.last_missing)
             if err:
-                self.text_result.setPlainText(f"❌ 插入失败: {err}")
+                self.text_report.setPlainText(f"❌ 插入失败: {err}")
             else:
-                self.text_result.setPlainText(
+                self.text_report.setPlainText(
                     f"✅ 已插入 {count} 个缺失章节占位符\n\n"
                     f"标记: {MISSING_MARKER}\n"
                     f"类名: {MISSING_CLASS}\n\n"
                     f"可随时使用「删除占位符」按钮移除"
                 )
+                self.tabs.setCurrentIndex(0)
 
     def do_remove_placeholders(self):
         reply = QMessageBox.question(
@@ -232,11 +253,12 @@ class MainDialog(QDialog):
         if reply == QMessageBox.Yes:
             count, err = remove_missing_placeholders(self.bk)
             if err:
-                self.text_result.setPlainText(f"❌ 删除失败: {err}")
+                self.text_report.setPlainText(f"❌ 删除失败: {err}")
             elif count == 0:
-                self.text_result.setPlainText("ℹ️ 未找到需要删除的占位符")
+                self.text_report.setPlainText("ℹ️ 未找到需要删除的占位符")
             else:
-                self.text_result.setPlainText(f"✅ 已删除 {count} 个占位符")
+                self.text_report.setPlainText(f"✅ 已删除 {count} 个占位符")
+            self.tabs.setCurrentIndex(0)
 
 
 def run(bk):

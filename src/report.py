@@ -1,4 +1,5 @@
 import re
+from collections import Counter
 
 from config import build_chapter_regex_str
 from num_utils import (
@@ -34,7 +35,7 @@ def check_sequence_report(
     numbers, context_name="", mode="reset_1", prev_end=None, original_order=None
 ):
     if not numbers:
-        return None, [], []
+        return None, [], [], []
 
     unique_numbers = sorted(list(set(numbers)))
     start, end = unique_numbers[0], unique_numbers[-1]
@@ -48,6 +49,7 @@ def check_sequence_report(
         expected_start = prev_end + 1
 
     report = []
+    issues = []
     status_icon = "✅"
     msg_prefix = ""
 
@@ -56,6 +58,12 @@ def check_sequence_report(
         msg_prefix = f"[起始错误: {start} (应为 {expected_start})]"
         status_icon = "⚠️ "
         range_start = min(expected_start, start)
+        issues.append({
+            "type": "start",
+            "context": context_name,
+            "items": [f"起始章节 {start}，应为 {expected_start}"],
+            "count": 1,
+        })
 
     full = set(range(range_start, end + 1))
     found = set(unique_numbers)
@@ -67,6 +75,12 @@ def check_sequence_report(
         formatted = format_missing_chapters(missing)
         report.append(f"   🔴 缺失 ({len(missing)} 章): {formatted}")
         report.append(f"   ℹ️  范围: {start} -> {end}")
+        issues.append({
+            "type": "missing",
+            "context": context_name,
+            "items": [str(n) for n in missing],
+            "count": len(missing),
+        })
     else:
         if msg_prefix:
             report.append(f"   {status_icon} 连续 {msg_prefix}")
@@ -85,25 +99,28 @@ def check_sequence_report(
                 order_issues.append(f"{prev_num}→{curr_num} (倒退)")
 
         if order_issues:
-            report.append(f"   ⚠️  顺序异常 ({len(order_issues)} 处):")
-            for issue in order_issues[:10]:
-                report.append(f"      • {issue}")
-            if len(order_issues) > 10:
-                report.append(f"      ... 等 {len(order_issues)} 处")
+            report.append(f"   ⚠️  顺序异常: {len(order_issues)} 处（详见【问题】）")
+            issues.append({
+                "type": "order",
+                "context": context_name,
+                "items": order_issues,
+                "count": len(order_issues),
+            })
 
     if len(numbers) != len(set(numbers)):
-        from collections import Counter
-
         counter = Counter(numbers)
         duplicates = [(num, count) for num, count in counter.items() if count > 1]
         if duplicates:
-            report.append(f"   ⚠️  重复章节 ({len(duplicates)} 个):")
-            for num, count in duplicates[:5]:
-                report.append(f"      • 第{num}章 出现{count}次")
-            if len(duplicates) > 5:
-                report.append(f"      ... 等 {len(duplicates)} 个")
+            dup_items = [f"第{num}章 出现{count}次" for num, count in duplicates]
+            report.append(f"   ⚠️  重复章节: {len(duplicates)} 个（详见【问题】）")
+            issues.append({
+                "type": "duplicate",
+                "context": context_name,
+                "items": dup_items,
+                "count": len(duplicates),
+            })
 
-    return end, report, missing
+    return end, report, missing, issues
 
 
 def split_by_reset(chapters):
@@ -180,6 +197,45 @@ def analyze_chapter_format(texts, config):
     }
 
 
+_ISSUE_TYPE_LABELS = {
+    "start": "起始错误",
+    "missing": "缺失章节",
+    "order": "顺序异常",
+    "duplicate": "重复章节",
+    "skipped": "解析跳过",
+}
+
+
+def format_issues_text(all_issues):
+    if not all_issues:
+        return "没有发现问题。"
+
+    grouped = {}
+    for issue in all_issues:
+        ctx = issue["context"]
+        if ctx not in grouped:
+            grouped[ctx] = []
+        grouped[ctx].append(issue)
+
+    lines = []
+    total_count = sum(issue["count"] for issue in all_issues)
+    lines.append(f"共发现 {total_count} 个问题")
+    lines.append("=" * 50)
+
+    for ctx, ctx_issues in grouped.items():
+        lines.append("")
+        lines.append(f"【{ctx}】")
+        lines.append("-" * 40)
+
+        for issue in ctx_issues:
+            label = _ISSUE_TYPE_LABELS.get(issue["type"], issue["type"])
+            lines.append(f"  {label} ({issue['count']} 项):")
+            for item in issue["items"]:
+                lines.append(f"    • {item}")
+
+    return "\n".join(lines)
+
+
 def perform_check(bk, config):
     prefix = config["chap_prefix"]
     num_type = config.get("chap_num_type", "mixed")
@@ -213,11 +269,11 @@ def perform_check(bk, config):
         chap_re = re.compile(chap_regex_str)
         vol_re = re.compile(vol_regex_str) if (enable_vol and vol_regex_str) else None
     except re.error as e:
-        return f"❌ 正则错误: {e}", []
+        return f"❌ 正则错误: {e}", [], []
 
     texts = get_nav_texts(bk)
     if not texts:
-        return "❌ 错误: 无法找到或解析目录文件 (nav.xhtml/toc.ncx)", []
+        return "❌ 错误: 无法找到或解析目录文件 (nav.xhtml/toc.ncx)", [], []
 
     analysis = analyze_chapter_format(texts, config)
     if analysis:
@@ -261,6 +317,7 @@ def perform_check(bk, config):
     current_vol = 0
     all_chapters_ordered = []
     skipped_texts = []
+    all_issues = []
 
     if enable_vol and vol_re:
         current_vol = -1
@@ -275,7 +332,7 @@ def perform_check(bk, config):
                 if vm.groups():
                     v_num = cn2an_simple(vm.group(1))
                     if v_num is None:
-                        skipped_texts.append(t.strip()[:30])
+                        skipped_texts.append(t.strip()[:50])
                         continue
                 else:
                     v_num = len(volume_order) + 1
@@ -289,7 +346,7 @@ def perform_check(bk, config):
         if cm:
             c_num = cn2an_simple(cm.group(1))
             if c_num is None:
-                skipped_texts.append(t.strip()[:30])
+                skipped_texts.append(t.strip()[:50])
                 continue
             all_chapters_ordered.append(c_num)
             target_vol = current_vol
@@ -315,28 +372,34 @@ def perform_check(bk, config):
                     continue
                 has_content = True
                 name = f"📑 分段 {idx}"
-                _, r, missing = check_sequence_report(
+                _, r, missing, seg_issues = check_sequence_report(
                     seg, name, mode=mode, prev_end=None, original_order=seg
                 )
                 report_lines.extend(r)
                 all_missing.extend(missing)
+                all_issues.extend(seg_issues)
 
             if not has_content:
                 report_lines.append("⚠️  未找到匹配的章节")
 
             if skipped_texts:
+                all_issues.append({
+                    "type": "skipped",
+                    "context": "解析",
+                    "items": skipped_texts,
+                    "count": len(skipped_texts),
+                })
                 report_lines.append("")
-                report_lines.append(f"⚠️  跳过 {len(skipped_texts)} 个无法解析的条目:")
-                for s in skipped_texts[:5]:
-                    report_lines.append(f"      • {s}")
+                report_lines.append(f"⚠️  跳过 {len(skipped_texts)} 个无法解析的条目（详见【问题】）")
 
-            return "\n".join(report_lines), all_missing
+            return "\n".join(report_lines), all_missing, all_issues
 
     if enable_vol and len(volume_order) > 0:
         real_vols = [v for v in volume_order if v != 0]
         if real_vols:
-            _, r, _ = check_sequence_report(real_vols, "📚 卷序列", mode="reset_1")
+            _, r, _, vol_issues = check_sequence_report(real_vols, "📚 卷序列", mode="reset_1")
             report_lines.extend(r)
+            all_issues.extend(vol_issues)
             report_lines.append("-" * 20)
 
     prev_end = 0
@@ -359,7 +422,7 @@ def perform_check(bk, config):
         if mode == "continuous" and vol == volume_order[0]:
             prev_end = 0
 
-        last_chap, r, missing = check_sequence_report(
+        last_chap, r, missing, vol_issues = check_sequence_report(
             chapters,
             name,
             mode=current_mode,
@@ -368,6 +431,7 @@ def perform_check(bk, config):
         )
         report_lines.extend(r)
         all_missing.extend(missing)
+        all_issues.extend(vol_issues)
 
         if last_chap is not None:
             prev_end = last_chap
@@ -379,12 +443,16 @@ def perform_check(bk, config):
             report_lines.append("   -> 未在 EPUB 中找到 nav.xhtml 或 toc.ncx")
 
     if skipped_texts:
+        all_issues.append({
+            "type": "skipped",
+            "context": "解析",
+            "items": skipped_texts,
+            "count": len(skipped_texts),
+        })
         report_lines.append("")
-        report_lines.append(f"⚠️  跳过 {len(skipped_texts)} 个无法解析的条目:")
-        for s in skipped_texts[:5]:
-            report_lines.append(f"      • {s}")
+        report_lines.append(f"⚠️  跳过 {len(skipped_texts)} 个无法解析的条目（详见【问题】）")
 
-    return "\n".join(report_lines), all_missing
+    return "\n".join(report_lines), all_missing, all_issues
 
 
 def _safe_get_toc(bk):
