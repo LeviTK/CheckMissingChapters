@@ -17,16 +17,18 @@
 
 ## 项目结构
 ```
-src/
-├── plugin.py        # 入口，导入 ui.run
-├── plugin.xml       # 插件配置
-├── pyqt_import.py   # Qt 兼容层（PyQt5/PySide6/PySide2）
-├── config.py        # 配置持久化与章节正则构建
-├── constants.py     # 共享常量
-├── num_utils.py     # 数字转换（全角、中文、阿拉伯）
-├── toc.py           # TOC 发现、解析与 nav.xhtml 修改
-├── report.py        # 检测逻辑与报告生成
-└── ui.py            # Qt 对话框与用户交互
-docs/
-└── CHANGELOG.md     # 版本变更记录
+├── AGENTS.md            # 开发指南（本文件）
+├── README.md            # 项目文档
+├── src/                 # 插件源码（打包此目录内容为 .zip 安装）
+│   ├── plugin.py        # 入口，导入 ui.run
+│   ├── plugin.xml       # 插件配置
+│   ├── pyqt_import.py   # Qt 兼容层（PyQt5/PySide6/PySide2）
+│   ├── config.py        # 配置持久化与章节正则构建
+│   ├── constants.py     # 共享常量
+│   ├── num_utils.py     # 数字转换（全角、中文、阿拉伯）
+│   ├── toc.py           # TOC 发现、解析与 nav.xhtml 修改
+│   ├── report.py        # 检测逻辑与报告生成
+│   └── ui.py            # Qt 对话框与用户交互
+└── docs/                # 文档目录
+    └── CHANGELOG.md     # 版本变更记录
 ```
